@@ -234,7 +234,7 @@ type meterArbiter struct {
 	ticker  *time.Ticker
 }
 
-var arbiter = meterArbiter{ticker: time.NewTicker(time.Second * 4)}
+var arbiter = meterArbiter{ticker: time.NewTicker(time.Second)}
 
 // Ticks meters on the scheduled interval
 func (ma *meterArbiter) tick() {
