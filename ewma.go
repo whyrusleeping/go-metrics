@@ -23,6 +23,11 @@ func NewEWMA(alpha float64) EWMA {
 	return &StandardEWMA{alpha: alpha}
 }
 
+// NewEWMAFine constructs a new EWMA for a one-second moving average.
+func NewEWMAFine() EWMA {
+	return NewEWMA(1 - math.Exp(-1.0))
+}
+
 // NewEWMA1 constructs a new EWMA for a one-minute moving average.
 func NewEWMA1() EWMA {
 	return NewEWMA(1 - math.Exp(-5.0/60.0/1))
@@ -77,7 +82,7 @@ func (NilEWMA) Update(n int64) {}
 // of uncounted events and processes them on each tick.  It uses the
 // sync/atomic package to manage uncounted events.
 type StandardEWMA struct {
-	uncounted int64		// /!\ this should be the first member to ensure 64-bit alignment
+	uncounted int64 // /!\ this should be the first member to ensure 64-bit alignment
 	alpha     float64
 	rate      float64
 	init      bool

@@ -10,6 +10,7 @@ import (
 type Meter interface {
 	Count() int64
 	Mark(int64)
+	RateFine() float64
 	Rate1() float64
 	Rate5() float64
 	Rate15() float64
@@ -56,6 +57,7 @@ func NewRegisteredMeter(name string, r Registry) Meter {
 // MeterSnapshot is a read-only copy of another Meter.
 type MeterSnapshot struct {
 	count                          int64
+	rateFine                       float64
 	rate1, rate5, rate15, rateMean float64
 }
 
@@ -66,6 +68,10 @@ func (m *MeterSnapshot) Count() int64 { return m.count }
 func (*MeterSnapshot) Mark(n int64) {
 	panic("Mark called on a MeterSnapshot")
 }
+
+// RateFine returns the one-second moving average rate of events per second at the
+// time the snapshot was taken.
+func (m *MeterSnapshot) RateFine() float64 { return m.rateFine }
 
 // Rate1 returns the one-minute moving average rate of events per second at the
 // time the snapshot was taken.
@@ -95,6 +101,9 @@ func (NilMeter) Count() int64 { return 0 }
 // Mark is a no-op.
 func (NilMeter) Mark(n int64) {}
 
+// RateFine is a no-op.
+func (NilMeter) RateFine() float64 { return 0.0 }
+
 // Rate1 is a no-op.
 func (NilMeter) Rate1() float64 { return 0.0 }
 
@@ -114,6 +123,7 @@ func (NilMeter) Snapshot() Meter { return NilMeter{} }
 type StandardMeter struct {
 	lock        sync.RWMutex
 	snapshot    *MeterSnapshot
+	aFine       EWMA
 	a1, a5, a15 EWMA
 	startTime   time.Time
 }
@@ -121,6 +131,7 @@ type StandardMeter struct {
 func newStandardMeter() *StandardMeter {
 	return &StandardMeter{
 		snapshot:  &MeterSnapshot{},
+		aFine:     NewEWMAFine(),
 		a1:        NewEWMA1(),
 		a5:        NewEWMA5(),
 		a15:       NewEWMA15(),
@@ -141,10 +152,19 @@ func (m *StandardMeter) Mark(n int64) {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	m.snapshot.count += n
+	m.aFine.Update(n)
 	m.a1.Update(n)
 	m.a5.Update(n)
 	m.a15.Update(n)
 	m.updateSnapshot()
+}
+
+// Rate1 returns the one-minute moving average rate of events per second.
+func (m *StandardMeter) RateFine() float64 {
+	m.lock.RLock()
+	rateFine := m.snapshot.rateFine
+	m.lock.RUnlock()
+	return rateFine
 }
 
 // Rate1 returns the one-minute moving average rate of events per second.
@@ -190,6 +210,7 @@ func (m *StandardMeter) Snapshot() Meter {
 func (m *StandardMeter) updateSnapshot() {
 	// should run with write lock held on m.lock
 	snapshot := m.snapshot
+	snapshot.rateFine = m.aFine.Rate()
 	snapshot.rate1 = m.a1.Rate()
 	snapshot.rate5 = m.a5.Rate()
 	snapshot.rate15 = m.a15.Rate()
@@ -199,6 +220,7 @@ func (m *StandardMeter) updateSnapshot() {
 func (m *StandardMeter) tick() {
 	m.lock.Lock()
 	defer m.lock.Unlock()
+	m.aFine.Tick()
 	m.a1.Tick()
 	m.a5.Tick()
 	m.a15.Tick()
@@ -212,7 +234,7 @@ type meterArbiter struct {
 	ticker  *time.Ticker
 }
 
-var arbiter = meterArbiter{ticker: time.NewTicker(5e9)}
+var arbiter = meterArbiter{ticker: time.NewTicker(time.Second * 4)}
 
 // Ticks meters on the scheduled interval
 func (ma *meterArbiter) tick() {
